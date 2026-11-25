@@ -130,6 +130,7 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     private final JTable outline=new JTable(outlineModel);
     private final JComboBox<DecompilerService.Engine> engine=new JComboBox<>(DecompilerService.Engine.values());
     private final List<Path> recentFiles=new ArrayList<>();
+    private final List<Path> recentJars=new ArrayList<>();
     private org.fife.ui.rtextarea.SearchContext findContext=new org.fife.ui.rtextarea.SearchContext();
     private int findNextCount;
     private final Preferences preferences=Preferences.userNodeForPackage(MainWindow.class);
@@ -174,7 +175,17 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
             public boolean canImport(TransferSupport support){return support.isDataFlavorSupported(DataFlavor.javaFileListFlavor);}
             @SuppressWarnings("unchecked") public boolean importData(TransferSupport support){
                 if(!canImport(support))return false;
-                try {for(java.io.File file:(List<java.io.File>)support.getTransferable().getTransferData(DataFlavor.javaFileListFlavor))openPath(file.toPath(),true);return true;}
+                try {
+                    List<java.io.File> files=(List<java.io.File>)support.getTransferable().getTransferData(DataFlavor.javaFileListFlavor);
+                    for(java.io.File file:files){
+                        Path path=file.toPath();
+                        if(Files.isDirectory(path))continue;
+                        String name=path.toString().toLowerCase();
+                        if(name.endsWith(".jar")||name.endsWith(".zip"))openPath(path,true);
+                        else openFile(path);
+                    }
+                    return true;
+                }
                 catch(Exception error){showError(error);return false;}
             }
         };
@@ -199,6 +210,7 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
         JMenuBar bar=new JMenuBar();JMenu file=new JMenu("Tệp"),edit=new JMenu("Chỉnh sửa"),view=new JMenu("Xem"),source=new JMenu("Mã nguồn"),run=new JMenu("Chạy"),debug=new JMenu("Gỡ lỗi"),window=new JMenu("Cửa sổ"),help=new JMenu("Trợ giúp");
         file.add(action("Mở tệp… (txt, java, …)","open","control shift O",this::openFile));
         file.add(recentMenu());
+        file.add(recentJarMenu());
         file.addSeparator();
         file.add(openAction);file.add(saveAction);file.add(saveAsAction);file.addSeparator();
         file.add(action("Xuất Java / tài nguyên đang xem…","export",null,this::exportSelected));
@@ -236,9 +248,15 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
         for(JMenu item:List.of(file,edit,view,source,run,debug,window,help))bar.add(item);return bar;
     }
     private JMenu recentMenu() {
-        JMenu recent=new JMenu("Mở gần đây");
+        JMenu recent=new JMenu("Tệp gần đây");
         if(recentFiles.isEmpty())recent.add(new JMenuItem("(chưa có)"));
         for(Path path:recentFiles)recent.add(action(path.getFileName().toString(),null,null,()->openFile(path)));
+        return recent;
+    }
+    private JMenu recentJarMenu() {
+        JMenu recent=new JMenu("JAR gần đây");
+        if(recentJars.isEmpty())recent.add(new JMenuItem("(chưa có)"));
+        for(Path path:recentJars)recent.add(action(path.getFileName().toString(),null,null,()->openPath(path,true)));
         return recent;
     }
     private JComponent toolbar() {
@@ -527,7 +545,9 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
             showError(new IllegalArgumentException("Chọn tệp .jar hoặc .zip chứa Java. Bản EXE là ứng dụng Windows của JarStudio; không phải trình chỉnh sửa .NET."));return CompletableFuture.failedFuture(new IllegalArgumentException("Unsupported file"));
         }
         return job("Đang mở "+normalized.getFileName()+"…",()->new JarSession(normalized),session->{
-            sessions.put(session.input(),session);rebuildTree();log("Đã mở "+session.input()+" — "+session.entries().size()+" tệp");status.setText("Đã mở "+session.displayName());
+            sessions.put(session.input(),session);
+            recentJars.remove(session.input());recentJars.add(0,session.input());if(recentJars.size()>20)recentJars.remove(recentJars.size()-1);
+            rebuildTree();log("Đã mở "+session.input()+" — "+session.entries().size()+" tệp");status.setText("Đã mở "+session.displayName());
             if(autoOpen){String main=session.mainClass();String first=main!=null&&session.entries().stream().anyMatch(entry->entry.name().equals(main.replace('.','/')+".class"))?main.replace('.','/')+".class":session.entries().stream().filter(JarSession.Entry::isClass).map(JarSession.Entry::name).findFirst().orElse("META-INF/MANIFEST.MF");openEntry(session,first,null);}
         });
     }
@@ -676,22 +696,97 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     public void breakpoint(EditorTab tab,int line){if(tab.info==null)return;try{debugger.toggle(DebugController.Breakpoint.line(tab.info.binaryName(),line));tab.toggleBreakpointIcon(line);refreshBreakpoints();log("Breakpoint "+tab.info.binaryName()+":"+line+" — dòng khớp chính xác sau khi biên dịch source đang xem.");}catch(Exception error){showError(error);}}
     public void fileSaved(Path file){log("Đã lưu tệp: "+file);status.setText("Đã lưu "+file.getFileName());}
     public void complete(EditorTab tab){showCompletion(tab);}
+    private static final String[] KEYWORDS={"public","private","protected","static","final","void","return","new","if","else","for","while","do","try","catch","finally","throw","throws","class","interface","enum","extends","implements","import","package","this","super","null","true","false","int","long","short","byte","char","float","double","boolean","synchronized","abstract","native","volatile","transient","instanceof","break","continue","switch","case","default","assert","yield","var","record","sealed","permits"};
+    private CompletionPopup completionPopup;
     private void showCompletion(EditorTab tab) {
         if(tab==null)return;
         String prefix=tab.caretWord();
-        // Collect word candidates from the current file plus the class members
         java.util.TreeSet<String> candidates=new java.util.TreeSet<>();
         for(String word:tab.source().split("\\b"))if(word.matches("[A-Za-z_$][A-Za-z0-9_$]{2,}")&&word.startsWith(prefix))candidates.add(word);
         if(tab.info!=null)for(ClassTools.Member member:tab.info.members())if(!member.name().equals("<init>")&&!member.name().equals("<clinit>")&&member.name().startsWith(prefix))candidates.add(member.name());
-        for(String keyword:new String[]{"public","private","protected","static","final","void","return","new","if","else","for","while","try","catch","throw","throws","class","interface","enum","extends","implements","import","package","this","super","null","true","false"})
-            if(keyword.startsWith(prefix)&&keyword.length()>prefix.length())candidates.add(keyword);
+        for(String keyword:KEYWORDS)if(keyword.startsWith(prefix)&&keyword.length()>prefix.length())candidates.add(keyword);
         if(candidates.isEmpty()){status.setText("Không có gợi ý cho \""+prefix+"\"");return;}
         List<String> list=new ArrayList<>(candidates);list.sort(java.util.Comparator.naturalOrder());
-        String chosen=JOptionPane.showInputDialog(this,"Tự hoàn thành cho \""+prefix+"\" (Ctrl+Space). Nhập để lọc, Enter để chọn:","");
-        if(chosen!=null&&!chosen.isBlank()) {
-            String best=list.stream().filter(c->c.startsWith(chosen.trim())).findFirst().orElse(list.stream().filter(c->c.startsWith(prefix)).findFirst().orElse(prefix));
-            tab.completeWord(best);tab.editor.requestFocusInWindow();
+        if(list.size()>200)list=new ArrayList<>(list.subList(0,200));
+        if(completionPopup!=null){completionPopup.close();completionPopup=null;}
+        try {completionPopup=new CompletionPopup(tab,list,caretScreenPoint(tab));}
+        catch(Exception error){
+            String chosen=JOptionPane.showInputDialog(this,"Tự hoàn thành cho \""+prefix+"\" (Ctrl+Space). Nhập để lọc, Enter để chọn:","");
+            if(chosen!=null&&!chosen.isBlank()){String best=list.stream().filter(c->c.startsWith(chosen.trim())).findFirst().orElse(prefix);tab.completeWord(best);tab.editor.requestFocusInWindow();}
         }
+    }
+    private java.awt.Point caretScreenPoint(EditorTab tab) {
+        java.awt.Point screen;
+        try {
+            screen=SwingUtilities.convertPoint(tab.editor,new java.awt.Point(0,0),null);
+            int caret=tab.editor.getCaretPosition();
+            int line=tab.editor.getLineOfOffset(caret);
+            int height=tab.editor.getFontMetrics(tab.editor.getFont()).getHeight();
+            screen=new java.awt.Point(screen.x+4,screen.y+Math.max(0,line)*height+2);
+        } catch(Exception error) {
+            try {screen=SwingUtilities.convertPoint(tab.editor,new java.awt.Point(0,0),null);}catch(Exception e2){screen=new java.awt.Point(160,160);}
+        }
+        return screen;
+    }
+    private static final class CompletionPopup {
+        private final javax.swing.JWindow window;
+        private final EditorTab tab;
+        private final List<String> all;
+        private final javax.swing.DefaultListModel<String> model=new javax.swing.DefaultListModel<>();
+        private final javax.swing.JList<String> list=new javax.swing.JList<>(model);
+        CompletionPopup(EditorTab tab,List<String> candidates,java.awt.Point screen) {
+            this.tab=tab;this.all=candidates;
+            window=new javax.swing.JWindow(SwingUtilities.getWindowAncestor(tab));
+            window.setAlwaysOnTop(true);
+            window.setBackground(new Color(249,251,253));
+            javax.swing.JTextField filter=new javax.swing.JTextField(22);
+            filter.setFont(Ui.FONT);
+            filter.setBorder(BorderFactory.createEmptyBorder(2,3,2,3));
+            list.setFont(Ui.FONT);
+            list.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION);
+            javax.swing.JScrollPane scroll=new javax.swing.JScrollPane(list);
+            scroll.setPreferredSize(new Dimension(340,180));
+            scroll.setBorder(null);
+            javax.swing.JPanel panel=new javax.swing.JPanel(new BorderLayout(0,2));
+            panel.setBackground(window.getBackground());
+            panel.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(new Color(150,160,175)),BorderFactory.createEmptyBorder(3,3,3,3)));
+            panel.add(filter,BorderLayout.NORTH);
+            panel.add(scroll,BorderLayout.CENTER);
+            window.add(panel);
+            window.pack();
+            int x=screen.x,y=screen.y;
+            int maxW=java.awt.Toolkit.getDefaultToolkit().getScreenSize().width;
+            if(x+window.getWidth()>maxW-8)x=Math.max(8,maxW-window.getWidth()-8);
+            window.setLocation(x,y);
+            javax.swing.event.DocumentListener doc=new javax.swing.event.DocumentListener(){
+                public void insertUpdate(javax.swing.event.DocumentEvent e){fill(filter.getText());}
+                public void removeUpdate(javax.swing.event.DocumentEvent e){fill(filter.getText());}
+                public void changedUpdate(javax.swing.event.DocumentEvent e){}
+            };
+            filter.getDocument().addDocumentListener(doc);
+            list.addMouseListener(new java.awt.event.MouseAdapter(){public void mouseClicked(java.awt.event.MouseEvent e){if(e.getClickCount()==2)pick(list.getSelectedValue());}});
+            filter.addKeyListener(new java.awt.event.KeyAdapter(){public void keyPressed(java.awt.event.KeyEvent e){
+                if(e.getKeyCode()==java.awt.event.KeyEvent.VK_ENTER){pick(list.getSelectedValue());}
+                else if(e.getKeyCode()==java.awt.event.KeyEvent.VK_ESCAPE){close();}
+                else if(e.getKeyCode()==java.awt.event.KeyEvent.VK_DOWN){int n=model.getSize();if(n>0)list.setSelectedIndex(Math.min(list.getSelectedIndex()+1,n-1));}
+                else if(e.getKeyCode()==java.awt.event.KeyEvent.VK_UP){int n=model.getSize();if(n>0)list.setSelectedIndex(Math.max(list.getSelectedIndex()-1,0));}
+            }});
+            window.addWindowListener(new java.awt.event.WindowAdapter(){public void windowDeactivated(java.awt.event.WindowEvent e){close();}});
+            window.setVisible(true);
+            fill("");
+            filter.requestFocusInWindow();
+        }
+        private void fill(String text) {
+            model.clear();
+            String low=text==null?"":text.toLowerCase();
+            int added=0;
+            for(String c:all){
+                if(low.isEmpty()||c.toLowerCase().startsWith(low)){model.addElement(c);if(++added>=80)break;}
+            }
+            if(model.getSize()>0)list.setSelectedIndex(0);
+        }
+        private void pick(String value) {if(value==null)return;close();tab.completeWord(value);tab.editor.requestFocusInWindow();}
+        private void close() {if(window.isShowing())window.dispose();}
     }
     private void toggleCurrentBreakpoint(){EditorTab tab=active();if(tab!=null)breakpoint(tab,tab.line());}
     private void methodBreakpoint(){Item item=selectedItem();if(item==null||item.member()==null||!item.member().method())return;Item selected=item;debugJob(()->{debugger.toggle(DebugController.Breakpoint.method(ClassTools.info(selected.session().read(selected.entry())).binaryName(),selected.member().name(),selected.member().descriptor()));SwingUtilities.invokeLater(this::refreshBreakpoints);return null;});}

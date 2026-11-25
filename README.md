@@ -22,7 +22,7 @@ Hoặc mở `run.cmd`. Lệnh này ưu tiên bản EXE đã build, sau đó tìm
 
 ## Luồng thao tác chính
 
-1. Kéo một hay nhiều JAR vào cửa sổ hoặc nhấn **Ctrl+O**.
+1. Kéo một hay nhiều JAR vào cửa sổ (kéo tệp txt/java/… để mở như trình soạn thảo) hoặc nhấn **Ctrl+O**.
 2. Mở class/hàm trong **Assembly Explorer**. Tab **Java** có tô màu cú pháp và code folding; **Bytecode** là bản đọc ASM.
 3. Sửa Java rồi nhấn **F6**. Lỗi được đưa vào bảng **Lỗi biên dịch**; bấm vào lỗi để tới dòng tương ứng.
 4. Nhấn **Ctrl+S**, chọn tên JAR đầu ra. Lần đầu ứng dụng gợi ý `ten-jar-edited.jar`.
@@ -41,10 +41,10 @@ Không thể đảm bảo mọi class decompile từ JAR obfuscated đều trở
 
 ## Tính năng kiểu IDE
 
-- **Mở tệp thường (txt/java/xml/properties/…):** Tệp → **Mở tệp…** (Ctrl+Shift+O) hoặc nút trên thanh công cụ. Tệp `.class` riêng lẻ cũng mở được (dịch ngược). Mở nhiều tệp, mỗi tệp một tab; **Mở gần đây** lưu tới 20 tệp.
+- **Mở tệp thường (txt/java/xml/properties/…):** kéo thả tệp vào cửa sổ (hoặc JAR/ZIP), Tệp → **Mở tệp…** (Ctrl+Shift+O). Tệp `.class` riêng lẻ cũng mở được (dịch ngược). Mỗi tệp một tab; menu **Tệp gần đây** và **JAR gần đây** lưu tới 20 mục.
 - **Sửa và lưu tệp trực tiếp:** tab tệp thường có thể soạn như trình soạn thảo; **Ctrl+S** ghi thẳng ra đĩa (khác lưu JAR). Nếu tệp thay đổi ngoài ứng dụng, có cảnh báo trước khi ghi đè.
 - **Tìm / thay trong tab:** Ctrl+F (tìm, giữ chuỗi đang chọn), Ctrl+H (tìm và thay tất cả), F3 (kết quả tiếp theo, vòng quanh).
-- **Tự hoàn thành:** Ctrl+Space (hoặc Shift+Insert) gợi ý từ có trong tệp, tên thành viên class đang mở và từ khóa Java; chọn để chèn.
+- **Tự hoàn thành:** Ctrl+Space (hoặc Shift+Insert) mở cửa sổ gợi ý từ có trong tệp, tên thành viên class đang mở và từ khóa Java; gõ để lọc, phím mũi tên/Enter/đúp chuột để chèn, Esc đóng.
 - **Bảng cấu trúc (Outline):** panel **Cấu trúc** liệt kê class, hàm và field; bấm đúp để nhảy tới dòng khai báo (mở tab khác nếu member thuộc JAR khác).
 - **Đi đến class:** Ctrl+T tìm class theo tên đủ package trong mọi JAR đang mở và mở thẳng.
 - **Biên dịch hàng loạt:** Ctrl+Shift+F6 biên dịch mọi class đang sửa trong các JAR, mỗi nhóm gom theo phiên bản class + package để class phụ thuộc biên dịch cùng nhau.

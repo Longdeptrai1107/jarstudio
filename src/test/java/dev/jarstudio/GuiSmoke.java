@@ -83,6 +83,25 @@ public final class GuiSmoke {
         IntegrationTests.check(failed,"broken source fails compile");
         SwingUtilities.invokeAndWait(tab::clearErrorMarkers);
         IntegrationTests.check(tab.errorCount()==errorsBefore,"error markers clear without residue");
+        Path dropped=directory.resolve("dropped.txt");Files.writeString(dropped,"dropped file content\n",java.nio.charset.StandardCharsets.UTF_8);
+        AtomicReference<Boolean> dropAccepted=new AtomicReference<>(false);
+        SwingUtilities.invokeAndWait(()->{
+            Transferable droppedTransferable=new Transferable(){public DataFlavor[] getTransferDataFlavors(){return new DataFlavor[]{DataFlavor.javaFileListFlavor};}public boolean isDataFlavorSupported(DataFlavor flavor){return flavor.equals(DataFlavor.javaFileListFlavor);}public Object getTransferData(DataFlavor flavor){return List.of(dropped.toFile());}};
+            dropAccepted.set(window.getRootPane().getTransferHandler().importData(new TransferHandler.TransferSupport(window.getRootPane(),droppedTransferable)));
+        });
+        IntegrationTests.check(dropAccepted.get(),"dropping a plain text file is accepted");
+        AtomicReference<EditorTab> droppedTab=new AtomicReference<>();long until2=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);
+        while(System.nanoTime()<until2){SwingUtilities.invokeAndWait(()->{for(EditorTab candidate:window.documents())if(candidate.fileExternal()&&dropped.toAbsolutePath().normalize().equals(candidate.file.toAbsolutePath().normalize()))droppedTab.set(candidate);});if(droppedTab.get()!=null)break;Thread.sleep(100);}
+        IntegrationTests.check(droppedTab.get()!=null&&droppedTab.get().source().contains("dropped file content"),"dropped text file opens in an editable tab");
+        AtomicReference<Object> popup=new AtomicReference<>();
+        SwingUtilities.invokeAndWait(()->{
+            try {
+                java.lang.reflect.Method method=MainWindow.class.getDeclaredMethod("showCompletion",EditorTab.class);method.setAccessible(true);method.invoke(window,tab);
+                java.lang.reflect.Field field=MainWindow.class.getDeclaredField("completionPopup");field.setAccessible(true);popup.set(field.get(window));
+            } catch(Exception error){IntegrationTests.check(false,"completion popup: "+error);}
+        });
+        IntegrationTests.check(popup.get()!=null,"completion popup opens (Ctrl+Space)");
+        if(popup.get()!=null){java.lang.reflect.Method close=popup.get().getClass().getDeclaredMethod("close");close.setAccessible(true);close.invoke(popup.get());}
         System.out.println("IDE: all ide feature checks done");
     }
     static void javaMeDebug(Path directory) throws Exception {

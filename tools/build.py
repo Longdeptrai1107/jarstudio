@@ -108,7 +108,7 @@ def main():
     for directory in [classes,resources]:
         for path in directory.rglob('*'):
             if path.is_file():content[path.relative_to(directory).as_posix()]=path.read_bytes()
-    content['META-INF/MANIFEST.MF']=b'Manifest-Version: 1.0\r\nMain-Class: dev.jarstudio.Main\r\nMulti-Release: true\r\nImplementation-Version: 1.0.0\r\n\r\n'
+    content['META-INF/MANIFEST.MF']=b'Manifest-Version: 1.0\r\nMain-Class: dev.jarstudio.Main\r\nMulti-Release: true\r\nImplementation-Version: 1.1.0\r\n\r\n'
     with zipfile.ZipFile(jar,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as output:
         for name,data in sorted(content.items()):
             info=zipfile.ZipInfo(name,date_time=(2026,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;output.writestr(info,data)
@@ -148,7 +148,7 @@ def main():
             if not valid:raise RuntimeError('Unexpected app image target; inspect before replacing it: %s'%', '.join(sorted(leftover)))
             remove_tree(existing)
         package_input=build/'package-input';package_input.mkdir(exist_ok=True);shutil.copy2(jar,package_input/'JarStudio.jar')
-        invoke([home/'bin/jpackage.exe','--type','app-image','--name','JarStudio','--app-version','1.0.0','--vendor','JarStudio','--input',package_input,'--main-jar','JarStudio.jar','--main-class','dev.jarstudio.Main','--dest',windows,'--runtime-image',runtime,'--java-options','-Xmx2g','--java-options','--add-modules=jdk.jdi,jdk.compiler'])
+        invoke([home/'bin/jpackage.exe','--type','app-image','--name','JarStudio','--app-version','1.1.0','--vendor','JarStudio','--input',package_input,'--main-jar','JarStudio.jar','--main-class','dev.jarstudio.Main','--dest',windows,'--runtime-image',runtime,'--java-options','-Xmx2g','--java-options','--add-modules=jdk.jdi,jdk.compiler'])
         for document in ['README.md','FEATURES.md','THIRD_PARTY_NOTICES.md']:
             if (ROOT/document).is_file():shutil.copy2(ROOT/document,existing/document)
         shutil.copytree(resources/'META-INF/licenses',existing/'licenses',dirs_exist_ok=True)
