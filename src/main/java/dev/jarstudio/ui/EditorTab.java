@@ -219,8 +219,16 @@ public final class EditorTab extends JPanel {
     public void jump(String member) {
         if(member==null||member.isBlank())return;views.setSelectedIndex(0);
         String name=member.equals("<init>")&&info!=null?info.internalName().substring(info.internalName().lastIndexOf('/')+1):member;
-        var pattern=java.util.regex.Pattern.compile("\\b"+java.util.regex.Pattern.quote(name)+"\\s*\\(").matcher(editor.getText());
-        if(pattern.find()){editor.setCaretPosition(pattern.start());editor.requestFocusInWindow();}
+        // Methods match "name("; the constructor shows up in source as "SimpleName(";
+        // fields have no "(", so they match a declaration-ish line "… NAME =/;" instead.
+        // (Fields used to be a silent no-op because only the method pattern existed.)
+        // [^=;\r\n]* stays on one line — a bare [^=;]* would cross newlines and make
+        // the match start on the previous line.
+        boolean method=member.equals("<init>")||info!=null&&info.members().stream().anyMatch(m->m.method()&&m.name().equals(member));
+        java.util.regex.Pattern pattern=method?java.util.regex.Pattern.compile("\\b"+java.util.regex.Pattern.quote(name)+"\\s*\\(")
+            :java.util.regex.Pattern.compile("(?m)^[^=;\\r\\n]*\\b"+java.util.regex.Pattern.quote(name)+"[ \\t]*(?:\\[[ \\t]*\\])*[ \\t]*(?:=|;)");
+        java.util.regex.Matcher search=pattern.matcher(editor.getText());
+        if(search.find()){editor.setCaretPosition(search.start());editor.requestFocusInWindow();}
     }
     public void jumpLine(int line){try{views.setSelectedIndex(0);editor.setCaretPosition(editor.getLineStartOffset(Math.min(Math.max(1,line),editor.getLineCount())-1));editor.requestFocusInWindow();}catch(Exception ignored){}}
     public void showExecutionLine(int line){clearExecutionLine();try{int index=Math.min(Math.max(1,line),editor.getLineCount())-1;executionHighlight=editor.getHighlighter().addHighlight(editor.getLineStartOffset(index),editor.getLineEndOffset(index),new javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(new Color(255,234,154)));jumpLine(line);}catch(Exception ignored){}}

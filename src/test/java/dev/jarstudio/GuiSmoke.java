@@ -245,6 +245,86 @@ public final class GuiSmoke {
         SwingUtilities.invokeAndWait(()->run.set(window.runMain("sample.Demo")));
         String output=run.get().get(90,TimeUnit.SECONDS);
         IntegrationTests.check(output.contains("BATCH_OK")&&output.contains("42"),"run-main executes the compiled class: "+output);
+        // (11) The completion popup must open at the caret in view coordinates, even on a
+        //     long, scrolled document. (The pre-1.1.2 formula happened to be close because
+        //     convertPoint already includes the scroll offset; the new code uses the exact
+        //     caret view rectangle instead of a line*height approximation, so this pins the
+        //     behavior to the caret position itself.)
+        StringBuilder longText=new StringBuilder();
+        for(int i=0;i<300;i++)longText.append("filler line ").append(i).append("\n");
+        SwingUtilities.invokeAndWait(()->window.editors.setSelectedComponent(fileTab));
+        AtomicReference<int[]> scrollInfo=new AtomicReference<>(new int[5]); // sizeY, viewH, y0, maxY, offset
+        SwingUtilities.invokeAndWait(()->{
+            try {
+                fileTab.editor.setText(longText.toString());
+                fileTab.editor.revalidate();
+                window.validate(); // force a synchronous layout pass so the view grows to 300 lines
+                int caret=fileTab.editor.getLineStartOffset(250);
+                fileTab.editor.setCaretPosition(caret);
+                int y0=fileTab.editor.modelToView(caret).y;
+                java.awt.Component comp=fileTab.editor;
+                while(comp!=null&&!(comp instanceof javax.swing.JViewport))comp=comp.getParent();
+                if(comp instanceof javax.swing.JViewport viewport) {
+                    int sizeY=viewport.getSize().height;
+                    int viewH=viewport.getView().getHeight();
+                    int maxY=Math.max(0,viewH-sizeY);
+                    viewport.setViewPosition(new java.awt.Point(0,Math.min(y0-100,maxY)));
+                    scrollInfo.set(new int[]{sizeY,viewH,y0,maxY,viewport.getViewPosition().y});
+                } else scrollInfo.set(new int[]{-1,0,0,0,0});
+            } catch(Exception error){IntegrationTests.check(false,"set up scrolled doc: "+error);}
+        });
+        int[] info=scrollInfo.get();
+        IntegrationTests.check(info[1]>info[0]+200&&info[4]>40,"long document is actually scrolled before measuring (viewH "+info[1]+", offset "+info[4]+")");
+        java.lang.reflect.Method caretPoint=MainWindow.class.getDeclaredMethod("caretScreenPoint",EditorTab.class);
+        caretPoint.setAccessible(true);
+        AtomicReference<java.awt.Point> popupAt=new AtomicReference<>();
+        AtomicReference<java.awt.Point> caretAt=new AtomicReference<>();
+        SwingUtilities.invokeAndWait(()->{
+            try {
+                int caretPos=fileTab.editor.getCaretPosition();
+                java.awt.Rectangle view=fileTab.editor.modelToView(caretPos);
+                java.awt.Point expected=SwingUtilities.convertPoint(fileTab.editor,new java.awt.Point(view.x,view.y),null);
+                popupAt.set((java.awt.Point)caretPoint.invoke(window,fileTab));
+                caretAt.set(expected);
+            } catch(Exception error){IntegrationTests.check(false,"caretScreenPoint: "+error);}
+        });
+        IntegrationTests.check(popupAt.get()!=null&&caretAt.get()!=null,"popup point computed");
+        if(popupAt.get()!=null&&caretAt.get()!=null) {
+            int dx=Math.abs(popupAt.get().x-caretAt.get().x);
+            int dy=Math.abs(popupAt.get().y-caretAt.get().y);
+            IntegrationTests.check(dx<=8&&dy<=8,"completion popup opens at the scrolled caret (delta "+dx+","+dy+")");
+        }
+        // (12) attach with an invalid port must raise a friendly error, not throw a raw NumberFormatException on the EDT.
+        boolean invalidPortRejected=false;
+        try{window.attachTarget("127.0.0.1","not-a-port");}catch(IllegalArgumentException expected){invalidPortRejected=expected.getMessage().toLowerCase().contains("port");}
+        IntegrationTests.check(invalidPortRejected,"attach with a non-numeric port reports a friendly error");
+        boolean rangeRejected=false;
+        try{window.attachTarget("127.0.0.1","99999");}catch(IllegalArgumentException expected){rangeRejected=true;}
+        IntegrationTests.check(rangeRejected,"attach with an out-of-range port reports a friendly error");
+        // (13) "Find references" on an external .class tab must be a graceful refusal, not an NPE inside the job.
+        //     External tabs carry session=null; the old code built Item(null, entry) and then
+        //     dereferenced target.session().read(...) on the worker thread -> NPE dialog.
+        boolean analyzeRefused=false;
+        int[] docsBefore=new int[1];SwingUtilities.invokeAndWait(()->docsBefore[0]=window.documents().size());
+        try {
+            SwingUtilities.invokeAndWait(()->{
+                EditorTab ext=classTab.get();
+                window.analyzeItem(new MainWindow.Item(ext.session,ext.entry,null));
+            });
+            Thread.sleep(500);
+            analyzeRefused=true;
+        } catch(Exception error){IntegrationTests.check(false,"analyze on external tab crashed: "+error);}
+        int[] docsAfter=new int[1];SwingUtilities.invokeAndWait(()->docsAfter[0]=window.documents().size());
+        IntegrationTests.check(analyzeRefused&&docsAfter[0]==docsBefore[0],"find-references on an external .class tab is a graceful refusal (no NPE, no new tab)");
+        // (14) Jumping to a FIELD (explorer double-click / search-result double-click path)
+        //     must land on the field line. The old code only matched "name(" so fields
+        //     were a silent no-op. Method jumps must keep working too.
+        SwingUtilities.invokeAndWait(()->demoTab.jump("GREETING"));
+        int[] fieldLine=new int[1];SwingUtilities.invokeAndWait(()->fieldLine[0]=demoTab.line());
+        IntegrationTests.check(fieldLine[0]==3,"jump to a field lands on the field declaration line (got "+fieldLine[0]+")");
+        SwingUtilities.invokeAndWait(()->demoTab.jump("plus"));
+        int[] methodLine=new int[1];SwingUtilities.invokeAndWait(()->methodLine[0]=demoTab.line());
+        IntegrationTests.check(methodLine[0]==4,"jump to a method still lands on the method line (got "+methodLine[0]+")");
         System.out.println("IDE: regression checks done");
     }
     static int outlineLine(javax.swing.table.TableModel model,String name) {

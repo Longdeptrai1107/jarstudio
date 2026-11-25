@@ -731,7 +731,16 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     private void exportSelected(){EditorTab tab=active();if(tab==null)return;JFileChooser picker=new JFileChooser();String defaultName=tab.fileExternal()?tab.file.getFileName().toString():(tab.isClass()?tab.info.internalName().substring(tab.info.internalName().lastIndexOf('/')+1)+".java":tab.entry.substring(tab.entry.lastIndexOf('/')+1).replace('\\','/'));picker.setSelectedFile(new java.io.File(defaultName));if(picker.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;Path destination=picker.getSelectedFile().toPath();job("Đang xuất tệp…",()->{byte[] bytes=tab.fileExternal()?(tab.canEdit()?tab.resourceBytes():Files.readAllBytes(tab.file)):(tab.isClass()?tab.source().getBytes(java.nio.charset.StandardCharsets.UTF_8):tab.canEdit()?tab.resourceBytes():tab.session.read(tab.entry));Files.write(destination,bytes);return destination;},path->log("Đã xuất "+path));}
     private void libraries(){JarSession session=selectedSession();if(session==null){showError(new IllegalStateException("Mở JAR trước khi thêm thư viện."));return;}DefaultListModel<Path> items=new DefaultListModel<>();session.libraries().forEach(items::addElement);JList<Path> list=new JList<>(items);JPanel panel=new JPanel(new BorderLayout());JScrollPane scroll=new JScrollPane(list);scroll.setPreferredSize(new Dimension(650,220));panel.add(scroll);JPanel bar=new JPanel(new FlowLayout(FlowLayout.LEFT));bar.add(Ui.button("Thêm JAR…","open",()->{JFileChooser picker=new JFileChooser();picker.setMultiSelectionEnabled(true);picker.setFileFilter(new FileNameExtensionFilter("JAR libraries","jar"));if(picker.showOpenDialog(this)==JFileChooser.APPROVE_OPTION)for(java.io.File file:picker.getSelectedFiles()){session.addLibrary(file.toPath());if(!items.contains(file.toPath()))items.addElement(file.toPath());}}));bar.add(Ui.button("Bỏ thư viện","close",()->{Path value=list.getSelectedValue();if(value!=null){session.removeLibrary(value);items.removeElement(value);}}));panel.add(bar,BorderLayout.SOUTH);JOptionPane.showMessageDialog(this,panel,"Thư viện phụ thuộc — tự nhận thư mục lib/libs",JOptionPane.PLAIN_MESSAGE);}
     private void searchAll(){String query=search.getText();List<JarSession> opened=sessions();job("Đang tìm trong JAR…",()->new SearchService().search(opened,query,5000),this::showHits);}
-    private void analyzeSelected(){Item item=selectedItem();EditorTab tab=active();if(item==null&&tab!=null)item=new Item(tab.session,tab.entry,null);if(item==null||!item.entry().endsWith(".class"))return;Item target=item;List<JarSession> opened=sessions();job("Đang tìm nơi sử dụng…",()->new SearchService().references(opened,ClassTools.info(target.session().read(target.entry())).internalName(),target.member()),this::showHits);}
+    private void analyzeSelected(){Item item=selectedItem();EditorTab tab=active();if(item==null&&tab!=null)item=new Item(tab.session,tab.entry,null);analyzeItem(item);}
+    public void analyzeItem(Item item) {
+        if(item==null||!item.entry().endsWith(".class"))return;
+        Item target=item;
+        // External .class tabs have session=null; their bytes live on disk, and there is
+        // no JAR session to search references against, so refuse gracefully.
+        if(target.session()==null){showError(new IllegalStateException("Tìm nơi sử dụng cần class nằm trong một JAR đang mở — class hiện mở là tệp .class rời. Mở JAR chứa nó trong explorer trước."));return;}
+        List<JarSession> opened=sessions();
+        job("Đang tìm nơi sử dụng…",()->new SearchService().references(opened,ClassTools.info(target.session().read(target.entry())).internalName(),target.member()),this::showHits);
+    }
     private void showHits(List<SearchService.Hit> hits){searchHits=hits;resultModel.setRowCount(0);for(var hit:hits)resultModel.addRow(new Object[]{hit.kind(),hit.entry(),hit.member(),hit.detail()});tools.setSelectedIndex(1);status.setText(hits.size()+" kết quả");}
     private void goToLine(){EditorTab tab=active();if(tab==null)return;String line=JOptionPane.showInputDialog(this,"Đến dòng:",tab.line());if(line!=null)try{tab.jumpLine(Integer.parseInt(line));}catch(NumberFormatException error){showError(new IllegalArgumentException("Nhập số dòng hợp lệ."));}}
     private void fontSize(int difference){for(EditorTab tab:documents)tab.editor.setFont(tab.editor.getFont().deriveFont((float)Math.max(10,Math.min(32,tab.editor.getFont().getSize()+difference))));}
@@ -758,17 +767,18 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
         }
     }
     private java.awt.Point caretScreenPoint(EditorTab tab) {
-        java.awt.Point screen;
+        // Convert the caret from editor coordinates — which already account for the
+        // current scroll — to the screen, so the popup opens at the caret no matter
+        // where the document is scrolled (the old "editor top + line * height" formula
+        // ignored scrolling and placed the popup off-screen on long files).
         try {
-            screen=SwingUtilities.convertPoint(tab.editor,new java.awt.Point(0,0),null);
-            int caret=tab.editor.getCaretPosition();
-            int line=tab.editor.getLineOfOffset(caret);
-            int height=tab.editor.getFontMetrics(tab.editor.getFont()).getHeight();
-            screen=new java.awt.Point(screen.x+4,screen.y+Math.max(0,line)*height+2);
+            java.awt.Rectangle view=tab.editor.modelToView(tab.editor.getCaretPosition());
+            java.awt.Point at=view==null?new java.awt.Point(0,0):new java.awt.Point(view.x,view.y);
+            java.awt.Point screen=SwingUtilities.convertPoint(tab.editor,at,null);
+            return new java.awt.Point(screen.x+4,screen.y+4);
         } catch(Exception error) {
-            try {screen=SwingUtilities.convertPoint(tab.editor,new java.awt.Point(0,0),null);}catch(Exception e2){screen=new java.awt.Point(160,160);}
+            try {return SwingUtilities.convertPoint(tab.editor,new java.awt.Point(0,0),null);}catch(Exception e2){return new java.awt.Point(160,160);}
         }
-        return screen;
     }
     private static final class CompletionPopup {
         private final javax.swing.JWindow window;
@@ -849,7 +859,16 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
             debugger.launch(target,arguments,cp);return applied;
         },this::accepted);
     }
-    private void attach(){JTextField host=new JTextField("127.0.0.1"),port=new JTextField("5005");JPanel panel=new JPanel(new GridLayout(0,2,7,7));panel.add(new JLabel("Host:"));panel.add(host);panel.add(new JLabel("Port:"));panel.add(port);if(JOptionPane.showConfirmDialog(this,panel,"Gắn vào JVM có JDWP",JOptionPane.OK_CANCEL_OPTION)==JOptionPane.OK_OPTION)debugJob(()->{debugger.attach(host.getText().strip(),Integer.parseInt(port.getText().strip()));return null;});}
+    private void attach(){JTextField host=new JTextField("127.0.0.1"),port=new JTextField("5005");JPanel panel=new JPanel(new GridLayout(0,2,7,7));panel.add(new JLabel("Host:"));panel.add(host);panel.add(new JLabel("Port:"));panel.add(port);if(JOptionPane.showConfirmDialog(this,panel,"Gắn vào JVM có JDWP",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;attachTarget(host.getText(),port.getText());}
+    public boolean attachTarget(String hostText,String portText) {
+        String host=hostText==null?"":hostText.strip();
+        String port=portText==null?"":portText.strip();
+        int value;try{value=Integer.parseInt(port);}
+        catch(NumberFormatException error){throw new IllegalArgumentException("Port phải là số, ví dụ 5005 (nhập \""+port+"\").");}
+        if(value<1||value>65535)throw new IllegalArgumentException("Port phải từ 1 đến 65535 (nhập \""+port+"\").");
+        debugJob(()->{debugger.attach(host,value);return null;});
+        return true;
+    }
     private void hotSwap(){EditorTab tab=active();if(tab==null||!tab.isClass())return;compileTab(tab).thenRun(()->debugJob(()->{Map<String,byte[]> changes=tab.session.snapshot().changed();int count=debugger.hotSwap(changes);SwingUtilities.invokeLater(()->log("Đã áp dụng code vào "+count+" class đang chạy. HotSwap JVM thường chỉ cho sửa thân hàm."));return null;}));}
     private void debugPaused(DebugController.Pause pause){changingStack=true;try{stackModel.clear();pause.frames().forEach(stackModel::addElement);if(!pause.frames().isEmpty())stack.setSelectedIndex(0);}finally{changingStack=false;}frameIndex=0;showVariables(pause.variables());refreshWatches();refreshThreads();tools.setSelectedIndex(3);if(!pause.frames().isEmpty()){var frame=pause.frames().get(0);String entry=frame.owner().replace('.','/')+".class";for(JarSession session:sessions.values())if(session.entries().stream().anyMatch(value->value.name().equals(entry))){openEntry(session,entry,frame.method()).thenAccept(tab->{if(frame.line()>0&&debugger.state()==DebugController.State.PAUSED)tab.showExecutionLine(frame.line());});break;}}updateActions();}
     private DefaultMutableTreeNode variableNode(DebugController.Variable value){DefaultMutableTreeNode node=new DefaultMutableTreeNode(value);if(value.value() instanceof com.sun.jdi.ObjectReference&&!(value.value() instanceof com.sun.jdi.StringReference))node.add(new DefaultMutableTreeNode("…"));return node;}
