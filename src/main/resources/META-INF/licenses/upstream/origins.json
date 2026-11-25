@@ -1,0 +1,27 @@
+[
+  {
+    "file": "ASM-LICENSE.txt",
+    "url": "https://asm.ow2.io/LICENSE.txt",
+    "sha256": "337e92fd361effe495d03978a34a3cd44681a63b8329adfd99c8996b306b2a8c"
+  },
+  {
+    "file": "CFR-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/leibnitz27/cfr/0.152/LICENSE",
+    "sha256": "d0b36fd265410a15e634220fdc6101976582799a09c69764f44bc21c21611527"
+  },
+  {
+    "file": "Vineflower-LICENSE.md",
+    "url": "https://raw.githubusercontent.com/Vineflower/vineflower/1.12.0/LICENSE.md",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "file": "ECJ-LICENSE.html",
+    "url": "https://www.eclipse.org/legal/epl-2.0/",
+    "sha256": "a23d82492ea90ecc90bd003247ac11306da2a24c8a2aecad19776435669a2bc1"
+  },
+  {
+    "file": "MicroEmulator-LGPL-2.1.txt",
+    "url": "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt",
+    "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+  }
+]
