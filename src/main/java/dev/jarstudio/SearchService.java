@@ -19,7 +19,15 @@ public final class SearchService {
         for(JarSession session:sessions)for(JarSession.Entry entry:session.entries()) {
             if(Thread.currentThread().isInterrupted())return hits;
             if(!entry.isClass())continue;
-            if(entry.name().toLowerCase(Locale.ROOT).contains(term))hits.add(new Hit(session,entry.name(),"Class","",entry.name()));
+            // Match the archive entry ("sample/Demo.class"), the binary name
+            // ("sample.Demo"), and the nested dotted form ("sample.Demo.Nested")
+            // so both simple and fully-qualified queries find the class.
+            String binary=entry.name();
+            if(binary.endsWith(".class"))binary=binary.substring(0,binary.length()-".class".length());
+            String names=(binary.replace('/','.')+" "
+                +binary.replace('/','.').replace('$','.')+" "
+                +binary+" "+entry.name()).toLowerCase(Locale.ROOT);
+            if(names.contains(term))hits.add(new Hit(session,entry.name(),"Class","",entry.name()));
             try {
                 ClassNode node=ClassTools.node(session.read(entry.name()));
                 for(var field:node.fields)if(field.name.toLowerCase(Locale.ROOT).contains(term))hits.add(new Hit(session,entry.name(),"Field",field.name,field.desc));

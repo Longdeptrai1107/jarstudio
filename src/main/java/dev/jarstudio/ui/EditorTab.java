@@ -189,13 +189,13 @@ public final class EditorTab extends JPanel {
         try{return editor.getDocument().getText(start,Math.max(0,caret-start));}catch(Exception error){return "";}
     }
     public void completeWord(String suggestion) {
+        if(suggestion==null)return;
         int caret=editor.getCaretPosition();int start=wordStart();
         try {
-            String word=editor.getDocument().getText(start,Math.max(0,caret-start));
-            int insert=suggestion.length()-word.length();
-            if(insert>0)editor.getDocument().insertString(caret,suggestion.substring(word.length()),null);
-            else if(insert<0)editor.getDocument().remove(start,word.length()+insert);
-            editor.setCaretPosition(caret+Math.max(0,insert));
+            // Replace the identifier prefix before the caret with the full suggestion.
+            editor.getDocument().remove(start,Math.max(0,caret-start));
+            editor.getDocument().insertString(start,suggestion,null);
+            editor.setCaretPosition(start+suggestion.length());
         }catch(Exception error){/* bộ tự hoàn thành không chặn thao tác */}
     }
     public Map<String,String> pendingConstants(){return Map.copyOf(constantChanges);}

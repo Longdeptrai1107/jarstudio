@@ -102,7 +102,164 @@ public final class GuiSmoke {
         });
         IntegrationTests.check(popup.get()!=null,"completion popup opens (Ctrl+Space)");
         if(popup.get()!=null){java.lang.reflect.Method close=popup.get().getClass().getDeclaredMethod("close");close.setAccessible(true);close.invoke(popup.get());}
+        System.out.println("IDE: regression checks next");
+        ideRegression(window,directory,tab,fileTab.get());
         System.out.println("IDE: all ide feature checks done");
+    }
+    static void ideRegression(MainWindow window,Path directory,EditorTab demoTab,EditorTab fileTab) throws Exception {
+        // (1) completeWord: longer and shorter candidates must both produce the exact
+        // suggestion (the shorter case used to corrupt the text). Caret sits at the end
+        // of the typed prefix, which is how completion is actually invoked.
+        SwingUtilities.invokeAndWait(()->{
+            fileTab.editor.setText("hel");fileTab.editor.setCaretPosition(3);
+            IntegrationTests.check(fileTab.wordStart()==0&&fileTab.caretWord().equals("hel"),"word boundary before caret");
+            fileTab.completeWord("hello");
+            IntegrationTests.check(fileTab.source().equals("hello"),"completion extends the typed prefix");
+            fileTab.editor.setText("hello");fileTab.editor.setCaretPosition(5);
+            fileTab.completeWord("he");
+            IntegrationTests.check(fileTab.source().equals("he"),"completion with a shorter candidate rewrites the whole prefix");
+            fileTab.editor.setCaretPosition(1);
+            fileTab.completeWord(null);
+            IntegrationTests.check(fileTab.source().equals("he"),"null completion is a no-op");
+        });
+        // (2) Outline must point at real declaration lines (class header, method, field).
+        // The Demo tab was clobbered to "not java" by the compile-error test, so restore a
+        // known, well-formatted source before reading the outline; otherwise -1== -1 is a
+        // vacuous pass.
+        String goodSource="package sample;\npublic class Demo {\n    public static final String GREETING = \"ORIGINAL\";\n    public static int plus(int value) {\n        return value + 1;\n    }\n}\n";
+        final byte[][] classBytes=new byte[1][];
+        try {classBytes[0]=demoTab.session.read(demoTab.entry);}catch(Exception error){classBytes[0]=new byte[0];}
+        SwingUtilities.invokeAndWait(()->demoTab.replaceSource(goodSource,classBytes[0]));
+        SwingUtilities.invokeAndWait(()->window.openEntry(demoTab.session,demoTab.entry,null));
+        SwingUtilities.invokeAndWait(()->{
+            try {java.lang.reflect.Method m=MainWindow.class.getDeclaredMethod("refreshOutline");m.setAccessible(true);m.invoke(window);}
+            catch(Exception error){IntegrationTests.check(false,"refreshOutline: "+error);}
+        });
+        java.lang.reflect.Field mf=MainWindow.class.getDeclaredField("outlineModel");mf.setAccessible(true);
+        var om=(javax.swing.table.TableModel)mf.get(window);
+        IntegrationTests.check(om.getRowCount()>=3,"outline lists class + members");
+        IntegrationTests.check(outlineLine(om,"Demo")==firstLine(goodSource,"class Demo"),"outline class row points at the class declaration");
+        IntegrationTests.check(outlineLine(om,"plus")==firstLine(goodSource,"plus("),"outline method row points at the method declaration");
+        IntegrationTests.check(outlineLine(om,"GREETING")==firstLine(goodSource,"GREETING"),"outline field row points at the field declaration");
+        // (3) Recent-files menu must reflect what was opened (bug: built once at startup).
+        java.lang.reflect.Field rfm=MainWindow.class.getDeclaredField("recentFilesMenu");rfm.setAccessible(true);
+        AtomicReference<String> labels=new AtomicReference<>("");
+        SwingUtilities.invokeAndWait(()->{
+            try {javax.swing.JMenu menu=(javax.swing.JMenu)rfm.get(window);StringBuilder sb=new StringBuilder();for(int i=0;i<menu.getItemCount();i++)sb.append(menu.getItem(i).getText()).append('|');labels.set(sb.toString());}
+            catch(Exception error){IntegrationTests.check(false,"read recent menu: "+error);}
+        });
+        IntegrationTests.check(labels.get().contains("note.txt"),"recent-files menu lists the opened text file");
+        Path second=directory.resolve("second.txt");Files.writeString(second,"second content\n",java.nio.charset.StandardCharsets.UTF_8);
+        SwingUtilities.invokeAndWait(()->window.openFile(second));
+        long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);
+        while(System.nanoTime()<until){final AtomicReference<Boolean> found=new AtomicReference<>(false);SwingUtilities.invokeAndWait(()->{for(EditorTab candidate:window.documents())if(candidate.fileExternal()&&second.toAbsolutePath().normalize().equals(candidate.file.toAbsolutePath().normalize()))found.set(true);});if(found.get())break;Thread.sleep(100);}
+        SwingUtilities.invokeAndWait(()->{
+            try {javax.swing.JMenu menu=(javax.swing.JMenu)rfm.get(window);StringBuilder sb=new StringBuilder();for(int i=0;i<menu.getItemCount();i++)sb.append(menu.getItem(i).getText()).append('|');labels.set(sb.toString());}
+            catch(Exception error){IntegrationTests.check(false,"read recent menu: "+error);}
+        });
+        IntegrationTests.check(labels.get().contains("second.txt")&&labels.get().contains("note.txt"),"recent-files menu updates when more files open");
+        // (4) F6 on an external tab must be a graceful no-op, not a crash.
+        AtomicReference<CompletableFuture<Void>> compileExternal=new AtomicReference<>();
+        SwingUtilities.invokeAndWait(()->compileExternal.set(window.compileTab(fileTab)));
+        compileExternal.get().get(30,TimeUnit.SECONDS);
+        IntegrationTests.check(true,"compile on external tab completes without error");
+        // (5) Opening a missing file must not crash or create a tab.
+        int[] docCount=new int[1];
+        SwingUtilities.invokeAndWait(()->docCount[0]=window.documents().size());
+        SwingUtilities.invokeAndWait(()->window.openFile(directory.resolve("does-not-exist.txt")));
+        Thread.sleep(1000);
+        int[] docCountAfter=new int[1];
+        SwingUtilities.invokeAndWait(()->docCountAfter[0]=window.documents().size());
+        IntegrationTests.check(docCountAfter[0]==docCount[0],"missing file does not add a tab or crash");
+        // (6) An external .class file opens as a decompiled Java tab.
+        Path srcDir=directory.resolve("extra-src");Files.createDirectories(srcDir);
+        Files.writeString(srcDir.resolve("Extra.java"),"public class Extra { public String value() { return \"EXTRA\"; } }\n");
+        Path classesDir=srcDir.resolve("classes");Files.createDirectories(classesDir);
+        var compiled=ProcessRunner.run(List.of(AppPaths.javaExecutable().toString(),"-m","jdk.compiler/com.sun.tools.javac.Main","--release","8","-g","-d",classesDir.toString(),srcDir.resolve("Extra.java").toString()),srcDir,java.time.Duration.ofSeconds(30));
+        IntegrationTests.check(compiled.exitCode()==0,"helper class compiles for external .class test: "+compiled.output());
+        Path classFile=classesDir.resolve("Extra.class");
+        AtomicReference<EditorTab> classTab=new AtomicReference<>();
+        SwingUtilities.invokeAndWait(()->window.openFile(classFile));
+        long until2=System.nanoTime()+TimeUnit.SECONDS.toNanos(40);
+        while(System.nanoTime()<until2){SwingUtilities.invokeAndWait(()->{for(EditorTab candidate:window.documents())if(candidate.fileExternal()&&candidate.isClass()&&classFile.toAbsolutePath().normalize().equals(candidate.file.toAbsolutePath().normalize()))classTab.set(candidate);});if(classTab.get()!=null)break;Thread.sleep(100);}
+        IntegrationTests.check(classTab.get()!=null&&classTab.get().source().contains("class Extra"),"external .class opens as decompiled Java tab");
+        // (7) Ctrl+S must save an external file even when no JAR is open (second window).
+        AtomicReference<MainWindow> secondWindow=new AtomicReference<>();
+        SwingUtilities.invokeAndWait(()->secondWindow.set(new MainWindow()));
+        MainWindow w2=secondWindow.get();
+        try {
+            Path lone=directory.resolve("lone.txt");Files.writeString(lone,"before\n",java.nio.charset.StandardCharsets.UTF_8);
+            SwingUtilities.invokeAndWait(()->w2.openFile(lone));
+            AtomicReference<EditorTab> loneTab=new AtomicReference<>();
+            long until3=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);
+            while(System.nanoTime()<until3){SwingUtilities.invokeAndWait(()->{for(EditorTab candidate:w2.documents())if(candidate.fileExternal()&&lone.toAbsolutePath().normalize().equals(candidate.file.toAbsolutePath().normalize()))loneTab.set(candidate);});if(loneTab.get()!=null)break;Thread.sleep(100);}
+            IntegrationTests.check(loneTab.get()!=null,"second window opens external file");
+            SwingUtilities.invokeAndWait(()->loneTab.get().editor.setText("after save\n"));
+            java.lang.reflect.Field sa=MainWindow.class.getDeclaredField("saveAction");sa.setAccessible(true);
+            AtomicReference<Boolean> saveEnabled=new AtomicReference<>(false);
+            SwingUtilities.invokeAndWait(()->{
+                try {
+                    javax.swing.Action save=(javax.swing.Action)sa.get(w2);
+                    saveEnabled.set(save.isEnabled());
+                    save.actionPerformed(null);
+                } catch(Exception error){IntegrationTests.check(false,"save action: "+error);}
+            });
+            IntegrationTests.check(saveEnabled.get(),"Ctrl+S is enabled when only an external file is open");
+            IntegrationTests.check(Files.readString(lone,java.nio.charset.StandardCharsets.UTF_8).equals("after save\n"),"Ctrl+S saves the external file with no JAR open");
+        } finally {
+            SwingUtilities.invokeAndWait(w2::shutdownForTest);
+        }
+        // (8) Go to class (Ctrl+T) must select the matching class tab.
+        AtomicReference<EditorTab> activeTab=new AtomicReference<>();
+        SwingUtilities.invokeAndWait(()->window.gotoClass("sample.Demo"));
+        long until4=System.nanoTime()+TimeUnit.SECONDS.toNanos(30);
+        boolean classSelected=false;
+        while(System.nanoTime()<until4){SwingUtilities.invokeAndWait(()->activeTab.set(window.active()));classSelected=activeTab.get()==demoTab;if(classSelected)break;Thread.sleep(100);}
+        IntegrationTests.check(classSelected,"go-to-class selects the class tab");
+        int[] docCountGoto=new int[1];
+        SwingUtilities.invokeAndWait(()->docCountGoto[0]=window.documents().size());
+        SwingUtilities.invokeAndWait(()->window.gotoClass("definitely.missing.Xyz"));
+        Thread.sleep(1000);
+        int[] docCountGotoAfter=new int[1];
+        SwingUtilities.invokeAndWait(()->docCountGotoAfter[0]=window.documents().size());
+        IntegrationTests.check(docCountGotoAfter[0]==docCountGoto[0],"go-to-class with no match does not crash or add tabs");
+        // (9) compileAll (Ctrl+Shift+F6) must compile every dirty class tab and stage the bytes.
+        String batchedSource="package sample;\npublic class Demo {\n    public static final String GREETING = \"ORIGINAL\";\n    public static int plus(int value) { return value + 1; }\n    public static String text() { return \"BATCH_OK\"; }\n    public static void main(String[] args) { System.out.println(text()); System.out.println(plus(41)); }\n}\n";
+        SwingUtilities.invokeAndWait(()->{
+            demoTab.editor.setText(batchedSource);
+            IntegrationTests.check(demoTab.dirty(),"class tab is dirty before compile-all");
+            window.compileAll();
+        });
+        long until5=System.nanoTime()+TimeUnit.SECONDS.toNanos(60);
+        AtomicReference<Boolean> clean=new AtomicReference<>(true);
+        while(System.nanoTime()<until5){SwingUtilities.invokeAndWait(()->clean.set(!demoTab.dirty()));if(clean.get())break;Thread.sleep(100);}
+        IntegrationTests.check(clean.get(),"compile-all clears the dirty state of the edited class");
+        AtomicReference<Boolean> staged=new AtomicReference<>(false);
+        SwingUtilities.invokeAndWait(()->{
+            try {staged.set(demoTab.session.snapshot().changed().containsKey(demoTab.entry));}
+            catch(Exception error){IntegrationTests.check(false,"snapshot: "+error);}
+        });
+        IntegrationTests.check(staged.get(),"compile-all stages the compiled class into the session");
+        // (10) runMain must compile any pending edits, build a runnable JAR and return its output.
+        AtomicReference<CompletableFuture<String>> run=new AtomicReference<>();
+        SwingUtilities.invokeAndWait(()->run.set(window.runMain("sample.Demo")));
+        String output=run.get().get(90,TimeUnit.SECONDS);
+        IntegrationTests.check(output.contains("BATCH_OK")&&output.contains("42"),"run-main executes the compiled class: "+output);
+        System.out.println("IDE: regression checks done");
+    }
+    static int outlineLine(javax.swing.table.TableModel model,String name) {
+        for(int i=0;i<model.getRowCount();i++) {
+            if(name.equals(model.getValueAt(i,1))) {
+                Object line=model.getValueAt(i,3);
+                return line instanceof Integer number?number.intValue():-1;
+            }
+        }
+        return -999;
+    }
+    static int firstLine(String source,String needle) {
+        String[] lines=source.split("\n",-1);
+        for(int i=0;i<lines.length;i++)if(lines[i].contains(needle))return i+1;
+        return -1;
     }
     static void javaMeDebug(Path directory) throws Exception {
         Path dir=directory.resolve("midlet");Files.createDirectories(dir);Path file=dir.resolve("TinyMidlet.java");

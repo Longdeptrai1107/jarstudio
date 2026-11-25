@@ -52,7 +52,9 @@ Không thể đảm bảo mọi class decompile từ JAR obfuscated đều trở
 - **Lỗi biên dịch trên lề:** khi F6 lỗi, dấu chấm ở gutter và bảng **Lỗi biên dịch**; bấm lỗi để tới dòng.
 - **Gom code / chú thích:** Ctrl+M gom/mở code folding; menu Mã nguồn → chú thích dòng.
 
-Tự hoàn thành và outline hỗ trợ thao tác, không phải index toàn bộ project hay phân tích kiểu như IDE đầy đủ. Tệp nhị phân (không phải text) mở ở chế độ xem hex, không thể sửa trực tiếp.
+Tự hoàn thành và outline hỗ trợ thao tác, không phải index toàn bộ project hay phân tích kiểu như IDE đầy đủ. Tệp nhị phân (không phải text) mở ở chế độ xem hex, không thể sửa trực tiếp; tệp trên 32 MB không mở được trong editor.
+
+Mỗi tính năng IDE có kiểm thử tự động chạy trên bản EXE đóng gói (mở/sửa/lưu tệp ngoài, kéo thả tệp, tìm/thay, popup tự hoàn thành, biên dịch hàng loạt, chạy main, đi đến class kể cả tên đủ package, outline theo số dòng, menu tệp/JAR gần đây, mở `.class` riêng, Ctrl+S khi chưa mở JAR, mở tệp không tồn tại phải báo lỗi chứ không crash).
 
 ## Gỡ lỗi JVM
 

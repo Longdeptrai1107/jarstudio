@@ -131,6 +131,8 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     private final JComboBox<DecompilerService.Engine> engine=new JComboBox<>(DecompilerService.Engine.values());
     private final List<Path> recentFiles=new ArrayList<>();
     private final List<Path> recentJars=new ArrayList<>();
+    private JMenu recentFilesMenu;
+    private JMenu recentJarsMenu;
     private org.fife.ui.rtextarea.SearchContext findContext=new org.fife.ui.rtextarea.SearchContext();
     private int findNextCount;
     private final Preferences preferences=Preferences.userNodeForPackage(MainWindow.class);
@@ -249,15 +251,26 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     }
     private JMenu recentMenu() {
         JMenu recent=new JMenu("Tệp gần đây");
-        if(recentFiles.isEmpty())recent.add(new JMenuItem("(chưa có)"));
-        for(Path path:recentFiles)recent.add(action(path.getFileName().toString(),null,null,()->openFile(path)));
+        recentFilesMenu=recent;
+        recent.addMenuListener(new javax.swing.event.MenuListener(){public void menuSelected(javax.swing.event.MenuEvent event){rebuildRecentMenu(recent,recentFiles,MainWindow.this::openFile);}public void menuDeselected(javax.swing.event.MenuEvent event){}public void menuCanceled(javax.swing.event.MenuEvent event){}});
+        rebuildRecentMenu(recent,recentFiles,this::openFile);
         return recent;
     }
     private JMenu recentJarMenu() {
         JMenu recent=new JMenu("JAR gần đây");
-        if(recentJars.isEmpty())recent.add(new JMenuItem("(chưa có)"));
-        for(Path path:recentJars)recent.add(action(path.getFileName().toString(),null,null,()->openPath(path,true)));
+        recentJarsMenu=recent;
+        recent.addMenuListener(new javax.swing.event.MenuListener(){public void menuSelected(javax.swing.event.MenuEvent event){rebuildRecentMenu(recent,recentJars,path->openPath(path,true));}public void menuDeselected(javax.swing.event.MenuEvent event){}public void menuCanceled(javax.swing.event.MenuEvent event){}});
+        rebuildRecentMenu(recent,recentJars,path->openPath(path,true));
         return recent;
+    }
+    private void rebuildRecentMenu(JMenu menu,List<Path> items,java.util.function.Consumer<Path> opener) {
+        menu.removeAll();
+        if(items.isEmpty())menu.add(new JMenuItem("(chưa có)"));
+        for(Path path:items)menu.add(action(path.getFileName().toString(),null,null,()->opener.accept(path)));
+    }
+    private void refreshRecentMenus() {
+        if(recentFilesMenu!=null)rebuildRecentMenu(recentFilesMenu,recentFiles,this::openFile);
+        if(recentJarsMenu!=null)rebuildRecentMenu(recentJarsMenu,recentJars,path->openPath(path,true));
     }
     private JComponent toolbar() {
         JToolBar bar=new JToolBar();bar.setFloatable(false);bar.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0,0,1,0,new Color(190,196,204)),BorderFactory.createEmptyBorder(3,5,3,5)));
@@ -312,11 +325,11 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
         JPanel threads=new JPanel(new BorderLayout());threadTable.setRowHeight(23);threads.add(new JScrollPane(threadTable));JPanel threadButtons=new JPanel(new FlowLayout(FlowLayout.LEFT,4,3));threadButtons.add(Ui.button("Làm mới","refresh",this::refreshThreads));threads.add(threadButtons,BorderLayout.SOUTH);tools.addTab("Threads",threads);
         threadTable.addMouseListener(new MouseAdapter(){public void mouseClicked(MouseEvent event){if(event.getClickCount()==2&&threadTable.getSelectedRow()>=0){long id=((Number)threadModel.getValueAt(threadTable.convertRowIndexToModel(threadTable.getSelectedRow()),0)).longValue();debugJob(()->{var selected=debugger.selectThread(id);SwingUtilities.invokeLater(()->debugPaused(selected));return null;});}}});
         outline.setRowHeight(23);outline.setAutoCreateRowSorter(true);tools.addTab("Cấu trúc",new JScrollPane(outline));
-        outline.addMouseListener(new MouseAdapter(){public void mouseClicked(MouseEvent event){if(event.getClickCount()==2&&outline.getSelectedRow()>=0){int model=outline.convertRowIndexToModel(outline.getSelectedRow());if(model<outlineRows.size()){OutlineRow row=outlineRows.get(model);var tab=active();JarSession session=(tab!=null&&row.owner.equals(tab.entry)&&tab.session!=null)?tab.session:selectedSession();if(session==null)return;if(tab!=null&&row.owner.equals(tab.entry))tab.jump(row.member);else openEntry(session,row.entry,row.member);}}}});
+        outline.addMouseListener(new MouseAdapter(){public void mouseClicked(MouseEvent event){if(event.getClickCount()==2&&outline.getSelectedRow()>=0){int model=outline.convertRowIndexToModel(outline.getSelectedRow());if(model<outlineRows.size()){OutlineRow row=outlineRows.get(model);var tab=active();JarSession session=(tab!=null&&row.owner.equals(tab.entry)&&tab.session!=null)?tab.session:selectedSession();if(session==null)return;if(tab!=null&&row.owner.equals(tab.entry)){if(row.classHeader()||row.line()<0)tab.jump(row.member);else tab.jumpLine(row.line());}else openEntry(session,row.entry,row.classHeader()?null:row.member);}}}});
         return tools;
     }
     private final List<OutlineRow> outlineRows=new ArrayList<>();
-    private record OutlineRow(String entry,String owner,String member,int line){}
+    private record OutlineRow(String entry,String owner,String member,int line,boolean classHeader){}
     private void showOutline(){tools.setSelectedIndex(8);refreshOutline();}
     private void refreshOutline(){
         var tab=active();outlineRows.clear();outlineModel.setRowCount(0);
@@ -324,24 +337,30 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
         String[] lines=tab.source().split("\n",-1);
         String simpleName=tab.info.internalName().substring(tab.info.internalName().lastIndexOf('/')+1);
         int classLine=lineOfDeclaration(lines,simpleName,true);
-        outlineModel.addRow(new Object[]{"Class",simpleName,"",classLine});
-        outlineRows.add(new OutlineRow(tab.entry,tab.entry,simpleName,classLine));
+        outlineModel.addRow(new Object[]{"Class",simpleName,"",classLine<0?"":classLine});
+        outlineRows.add(new OutlineRow(tab.entry,tab.entry,simpleName,classLine,true));
         for(ClassTools.Member member:tab.info.members()) {
             if(member.name().equals("<init>")||member.name().equals("<clinit>"))continue;
-            int line=lineOfDeclaration(lines,member.name(),false);
-            outlineModel.addRow(new Object[]{member.method()?"Hàm":"Field",member.name(),member.descriptor(),line});
-            outlineRows.add(new OutlineRow(tab.entry,tab.entry,member.name(),line));
+            int line=lineOfDeclaration(lines,member.name(),!member.method());
+            outlineModel.addRow(new Object[]{member.method()?"Hàm":"Field",member.name(),member.descriptor(),line<0?"":line});
+            outlineRows.add(new OutlineRow(tab.entry,tab.entry,member.name(),line,false));
         }
     }
-    private int lineOfDeclaration(String[] lines,String name,boolean classDeclaration) {
+    private int lineOfDeclaration(String[] lines,String name,boolean fieldOrClass) {
         if(name==null||name.isBlank())return -1;
-        if(classDeclaration) {
-            var pattern=java.util.regex.Pattern.compile("(?m)^\\s*\\b(class|interface|enum|record)\\s+"+java.util.regex.Pattern.quote(name)+"\\b");
-            for(int i=0;i<lines.length;i++)if(pattern.matcher(lines[i]).find())return i+1;
+        String quoted=java.util.regex.Pattern.quote(name);
+        if(fieldOrClass) {
+            // Class header may carry modifiers ("public class X"); field is "TYPE NAME = ...;" or "TYPE NAME;".
+            java.util.regex.Pattern classPattern=java.util.regex.Pattern.compile("(?m)^\\s*(?:(?:public|protected|private|static|final|abstract|strictfp)\\s+)*(?:class|interface|enum|record)\\s+"+quoted+"\\b");
+            java.util.regex.Pattern fieldPattern=java.util.regex.Pattern.compile("(?m)^\\s*(?:(?:public|protected|private|static|final|transient|volatile)\\s+)*[^\\s=;()]+\\s+"+quoted+"\\s*(?:\\[\\s*\\])*\\s*(?:=|;)");
+            for(int i=0;i<lines.length;i++)if(classPattern.matcher(lines[i]).find())return i+1;
+            for(int i=0;i<lines.length;i++)if(fieldPattern.matcher(lines[i]).find())return i+1;
+            for(int i=0;i<lines.length;i++)if(lines[i].contains(quoted))return i+1;
             return -1;
         }
-        var pattern=java.util.regex.Pattern.compile("(?m)^\\s*(?:(?:public|protected|private|static|final|synchronized|abstract|native|strictfp)\\s+)*[^\\s=;]+\\s+"+java.util.regex.Pattern.quote(name)+"\\s*\\(");
-        for(int i=0;i<lines.length;i++)if(pattern.matcher(lines[i]).find())return i+1;
+        // Method declaration: "TYPE NAME(args) {" ends with '{'; a call site ends with ';'.
+        java.util.regex.Pattern methodPattern=java.util.regex.Pattern.compile("(?m)^\\s*(?:(?:public|protected|private|static|final|synchronized|abstract|native|strictfp)\\s+)*[^\\s=;()]+\\s+"+quoted+"\\s*\\(.*\\)\\s*\\{\\s*$");
+        for(int i=0;i<lines.length;i++)if(methodPattern.matcher(lines[i].strip()).find())return i+1;
         for(int i=0;i<lines.length;i++)if(lines[i].contains(name+"("))return i+1;
         return -1;
     }
@@ -374,7 +393,14 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     }
     public void openFile(Path file) {
         Path path=file.toAbsolutePath().normalize();
+        if(Files.isDirectory(path))return;
+        if(!Files.isRegularFile(path)){showError(new IllegalArgumentException("Không mở được tệp (có thể đã bị xóa hoặc không tồn tại): "+path));return;}
+        long size;
+        try {size=Files.size(path);}
+        catch(java.io.IOException error) {showError(error);return;}
+        if(size>32L*1024*1024){showError(new IllegalArgumentException("Tệp lớn hơn 32 MB — quá nặng để mở trong editor. Hãy dùng Thêm tệp vào JAR hoặc Thay tệp."));return;}
         recentFiles.remove(path);recentFiles.add(0,path);if(recentFiles.size()>20)recentFiles.remove(recentFiles.size()-1);
+        refreshRecentMenus();
         preferences.put("lastFileFolder",path.getParent().toString());
         job("Đang mở "+path.getFileName()+"…",()->{
             byte[] bytes=Files.readAllBytes(path);
@@ -408,8 +434,13 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
         EditorTab tab=active();
         if(tab==null)return;
         if(tab.fileExternal()) {
-            job("Đang lưu tệp…",()->{tab.saveFile();return null;},result->{});
-        } else saveSelected(false);
+            // Save a local file on the EDT: it may show a modal (external change)
+            // and updates tab title/status. A background job here could deadlock.
+            try {tab.saveFile();status.setText("Đã lưu "+tab.file.getFileName());}
+            catch(Exception error) {showError(error);}
+            return;
+        }
+        saveSelected(false);
     }
     private void findInEditor(){
         EditorTab tab=active();if(tab==null)return;
@@ -450,6 +481,9 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     private void gotoClass(){
         String query=JOptionPane.showInputDialog(this,"Tên class (đủ package, vd: com.example.Main):",active()==null?"":activeTabSimple());
         if(query==null||query.isBlank())return;
+        gotoClass(query);
+    }
+    public void gotoClass(String query) {
         String name=query.strip().replace('.','/');
         List<JarSession> opened=sessions();
         job("Đang tìm class "+name+"…",()->new SearchService().search(opened,name.replace('/','.'),200),hits->{
@@ -521,8 +555,15 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
         if((guess==null||guess.isBlank())&&tab!=null&&tab.session==session&&tab.info!=null)guess=tab.info.binaryName();
         String main=JOptionPane.showInputDialog(this,"Class có public static void main(String[] args):",guess==null?"":guess);
         if(main==null||main.isBlank())return;
-        List<Edit> pending;try{pending=edits(session);}catch(Exception error){showError(error);return;}
-        job("Đang biên dịch và chạy "+main+"…",()->{
+        runMain(main);
+    }
+    public CompletableFuture<String> runMain(String main) {
+        JarSession session=selectedSession();
+        if(session==null)return CompletableFuture.failedFuture(new IllegalStateException("Mở JAR trước khi chạy class."));
+        List<Edit> pending;
+        try {pending=edits(session);}
+        catch(Exception error) {return CompletableFuture.failedFuture(error);}
+        return job("Đang biên dịch và chạy "+main+"…",()->{
             Applied applied=apply(pending);
             JarSession fork=new JarSession(session.input());
             var snapshot=session.snapshot();fork.stageAll(snapshot.changed());for(String name:snapshot.deleted())fork.delete(name);
@@ -536,7 +577,7 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
             log("---- đầu ra "+main+" ----");
             log(runResult.output()==null||runResult.output().isBlank()?"(không có đầu ra)":runResult.output().strip());
             tools.setSelectedIndex(0);status.setText("Đã chạy "+main);
-        });
+        }).thenApply(RunResult::output);
     }
     public CompletableFuture<JarSession> openPath(Path path,boolean autoOpen) {
         Path normalized=path.toAbsolutePath().normalize();JarSession existing=sessions.get(normalized);
@@ -546,7 +587,7 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
         }
         return job("Đang mở "+normalized.getFileName()+"…",()->new JarSession(normalized),session->{
             sessions.put(session.input(),session);
-            recentJars.remove(session.input());recentJars.add(0,session.input());if(recentJars.size()>20)recentJars.remove(recentJars.size()-1);
+            recentJars.remove(session.input());recentJars.add(0,session.input());if(recentJars.size()>20)recentJars.remove(recentJars.size()-1);refreshRecentMenus();
             rebuildTree();log("Đã mở "+session.input()+" — "+session.entries().size()+" tệp");status.setText("Đã mở "+session.displayName());
             if(autoOpen){String main=session.mainClass();String first=main!=null&&session.entries().stream().anyMatch(entry->entry.name().equals(main.replace('.','/')+".class"))?main.replace('.','/')+".class":session.entries().stream().filter(JarSession.Entry::isClass).map(JarSession.Entry::name).findFirst().orElse("META-INF/MANIFEST.MF");openEntry(session,first,null);}
         });
@@ -640,6 +681,7 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     }
     public CompletableFuture<Void> compileTab(EditorTab tab) {
         if(tab==null)return CompletableFuture.completedFuture(null);
+        if(tab.fileExternal()){showError(new IllegalStateException("Tab tệp ngoài không biên dịch trong JAR — dùng Ctrl+S để lưu tệp."));return CompletableFuture.completedFuture(null);}
         if(tab.sourceDirty()&&!tab.pendingConstants().isEmpty()){IllegalStateException error=new IllegalStateException("Không trộn sửa Java và Hằng số trước khi biên dịch. Hoàn tác một phần trước.");showError(error);return CompletableFuture.failedFuture(error);}
         errorDocument=tab;errorModel.setRowCount(0);List<Edit> pending=List.of(new Edit(tab,tab.source(),tab.isClass()?null:tab.resourceBytes(),tab.pendingConstants()));
         return job("Đang biên dịch "+tab.title()+"…",()->apply(pending),result->{accepted(result);tab.clearErrorMarkers();status.setText("Biên dịch thành công. Ctrl+S để lưu JAR.");log("Biên dịch thành công: "+tab.entry);}).whenComplete((result,error)->{
@@ -686,7 +728,7 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     private void deleteSelected(){Item item=selectedItem();if(item==null)return;if(JOptionPane.showConfirmDialog(this,"Xóa khỏi JAR khi lưu?\n"+item.entry(),"Xóa tệp",JOptionPane.YES_NO_OPTION)==JOptionPane.YES_OPTION){item.session().delete(item.entry());removeLoaded(item.session(),item.entry());rebuildTree();}}
     private void removeLoaded(JarSession session,String entry){for(EditorTab tab:new ArrayList<>(documents))if(tab.session==session&&tab.entry.equals(entry)){documents.remove(tab);editors.remove(tab);}}
     private void defaultReturn(){Item item=selectedItem();if(item==null||item.member()==null||!item.member().method())return;if(JOptionPane.showConfirmDialog(this,"Thay toàn bộ thân hàm bằng return 0/false/null (hoặc return cho void)?\n"+item.member().display(),"Thay thân hàm",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;job("Đang sửa bytecode hàm…",()->ClassTools.defaultReturn(item.session().read(item.entry()),item.member().name(),item.member().descriptor()),bytes->{item.session().stage(item.entry(),bytes);removeLoaded(item.session(),item.entry());rebuildTree();openEntry(item.session(),item.entry(),item.member().name());});}
-    private void exportSelected(){EditorTab tab=active();if(tab==null)return;JFileChooser picker=new JFileChooser();picker.setSelectedFile(new java.io.File(tab.isClass()?tab.info.internalName().substring(tab.info.internalName().lastIndexOf('/')+1)+".java":tab.entry.substring(tab.entry.lastIndexOf('/')+1)));if(picker.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;Path destination=picker.getSelectedFile().toPath();job("Đang xuất tệp…",()->{byte[] bytes=tab.isClass()?tab.source().getBytes(java.nio.charset.StandardCharsets.UTF_8):tab.canEdit()?tab.resourceBytes():tab.session.read(tab.entry);Files.write(destination,bytes);return destination;},path->log("Đã xuất "+path));}
+    private void exportSelected(){EditorTab tab=active();if(tab==null)return;JFileChooser picker=new JFileChooser();String defaultName=tab.fileExternal()?tab.file.getFileName().toString():(tab.isClass()?tab.info.internalName().substring(tab.info.internalName().lastIndexOf('/')+1)+".java":tab.entry.substring(tab.entry.lastIndexOf('/')+1).replace('\\','/'));picker.setSelectedFile(new java.io.File(defaultName));if(picker.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;Path destination=picker.getSelectedFile().toPath();job("Đang xuất tệp…",()->{byte[] bytes=tab.fileExternal()?(tab.canEdit()?tab.resourceBytes():Files.readAllBytes(tab.file)):(tab.isClass()?tab.source().getBytes(java.nio.charset.StandardCharsets.UTF_8):tab.canEdit()?tab.resourceBytes():tab.session.read(tab.entry));Files.write(destination,bytes);return destination;},path->log("Đã xuất "+path));}
     private void libraries(){JarSession session=selectedSession();if(session==null){showError(new IllegalStateException("Mở JAR trước khi thêm thư viện."));return;}DefaultListModel<Path> items=new DefaultListModel<>();session.libraries().forEach(items::addElement);JList<Path> list=new JList<>(items);JPanel panel=new JPanel(new BorderLayout());JScrollPane scroll=new JScrollPane(list);scroll.setPreferredSize(new Dimension(650,220));panel.add(scroll);JPanel bar=new JPanel(new FlowLayout(FlowLayout.LEFT));bar.add(Ui.button("Thêm JAR…","open",()->{JFileChooser picker=new JFileChooser();picker.setMultiSelectionEnabled(true);picker.setFileFilter(new FileNameExtensionFilter("JAR libraries","jar"));if(picker.showOpenDialog(this)==JFileChooser.APPROVE_OPTION)for(java.io.File file:picker.getSelectedFiles()){session.addLibrary(file.toPath());if(!items.contains(file.toPath()))items.addElement(file.toPath());}}));bar.add(Ui.button("Bỏ thư viện","close",()->{Path value=list.getSelectedValue();if(value!=null){session.removeLibrary(value);items.removeElement(value);}}));panel.add(bar,BorderLayout.SOUTH);JOptionPane.showMessageDialog(this,panel,"Thư viện phụ thuộc — tự nhận thư mục lib/libs",JOptionPane.PLAIN_MESSAGE);}
     private void searchAll(){String query=search.getText();List<JarSession> opened=sessions();job("Đang tìm trong JAR…",()->new SearchService().search(opened,query,5000),this::showHits);}
     private void analyzeSelected(){Item item=selectedItem();EditorTab tab=active();if(item==null&&tab!=null)item=new Item(tab.session,tab.entry,null);if(item==null||!item.entry().endsWith(".class"))return;Item target=item;List<JarSession> opened=sessions();job("Đang tìm nơi sử dụng…",()->new SearchService().references(opened,ClassTools.info(target.session().read(target.entry())).internalName(),target.member()),this::showHits);}
@@ -819,7 +861,7 @@ public final class MainWindow extends JFrame implements EditorTab.Callback {
     private void closeSession(){if(busy>0){status.setText("Chờ tác vụ hiện tại hoàn tất trước khi đóng JAR.");return;}JarSession session=selectedSession();if(session==null)return;if((session.dirty()||documents.stream().anyMatch(tab->tab.session==session&&tab.dirty()))&&JOptionPane.showConfirmDialog(this,"JAR có thay đổi chưa lưu. Đóng và bỏ các thay đổi?","Đóng JAR",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;for(EditorTab tab:new ArrayList<>(documents))if(tab.session==session){documents.remove(tab);editors.remove(tab);}sessions.values().removeIf(value->value==session);savedOutputs.remove(session);rebuildTree();}
     private void closeWindow(){if(busy>0){status.setText("Chờ tác vụ hiện tại hoàn tất trước khi thoát.");return;}if((sessions.values().stream().anyMatch(JarSession::dirty)||documents.stream().anyMatch(EditorTab::dirty))&&JOptionPane.showConfirmDialog(this,"Có thay đổi chưa lưu. Thoát và bỏ thay đổi?","Thoát JarStudio",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;debugger.stop();executor.shutdownNow();dispose();}
     private void updatePosition(){EditorTab tab=active();if(tab==null){position.setText("Java JAR Editor");setTitle("JarStudio — Java Assembly Editor");return;}String where=tab.session==null?String.valueOf(tab.file):tab.entry;position.setText("Ln "+tab.line()+"  |  "+where);setTitle("JarStudio — "+where+(tab.session==null?"":" ["+tab.session.displayName()+"]"));}
-    private void updateActions(){boolean idle=busy==0,opened=!sessions.isEmpty();EditorTab tab=active();for(EditorTab document:documents)document.editor.setEditable(idle&&document.canEdit());saveAction.setEnabled(idle&&opened);saveAsAction.setEnabled(idle&&opened);compileAction.setEnabled(idle&&tab!=null&&(tab.canEdit()||!tab.pendingConstants().isEmpty()));runAction.setEnabled(idle&&opened&&debugger.state()!=DebugController.State.RUNNING);pauseAction.setEnabled(debugger.state()==DebugController.State.RUNNING);stopAction.setEnabled(debugger.state()!=DebugController.State.DISCONNECTED);boolean paused=debugger.state()==DebugController.State.PAUSED;stepIntoAction.setEnabled(paused);stepOverAction.setEnabled(paused);stepOutAction.setEnabled(paused);openAction.setEnabled(idle);}
+    private void updateActions(){boolean idle=busy==0,opened=!sessions.isEmpty();EditorTab tab=active();for(EditorTab document:documents)document.editor.setEditable(idle&&document.canEdit());boolean canSaveJar=opened;boolean canSaveFile=documents.stream().anyMatch(EditorTab::fileExternal);saveAction.setEnabled(idle&&(canSaveJar||canSaveFile));saveAsAction.setEnabled(idle&&canSaveJar);compileAction.setEnabled(idle&&tab!=null&&(tab.canEdit()||!tab.pendingConstants().isEmpty()));runAction.setEnabled(idle&&opened&&debugger.state()!=DebugController.State.RUNNING);pauseAction.setEnabled(debugger.state()==DebugController.State.RUNNING);stopAction.setEnabled(debugger.state()!=DebugController.State.DISCONNECTED);boolean paused=debugger.state()==DebugController.State.PAUSED;stepIntoAction.setEnabled(paused);stepOverAction.setEnabled(paused);stepOutAction.setEnabled(paused);openAction.setEnabled(idle);}
     private <T> CompletableFuture<T> job(String message,Callable<T> action,Consumer<T> success){
         CompletableFuture<T> future=new CompletableFuture<>();busy++;progress.setVisible(true);progress.setIndeterminate(true);status.setText(message);updateActions();
         currentJob=executor.submit(()->{try{T result=action.call();SwingUtilities.invokeLater(()->{try{success.accept(result);future.complete(result);}catch(Throwable error){showError(error);future.completeExceptionally(error);}finally{busy--;progress.setVisible(busy>0);updateActions();}});}catch(Throwable error){SwingUtilities.invokeLater(()->{busy--;progress.setVisible(busy>0);showError(error);updateActions();future.completeExceptionally(error);});}});return future;
